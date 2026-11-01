@@ -28,14 +28,14 @@ func main() {
 
 	stepRepo := repository.NewSagaStepRepository(dbx)
 
-	paypalPayment := service.NewPayPalSandboxProvider()
+	fakePayment := service.NewFakePaymentProvider()
 
 	orchestrator := service.NewOrchestrator(
 		dbx,
 		stepRepo,
 		service.StubInventoryOwner{},
-		paypalPayment,
-		service.StubShipmentOwner{},
+		fakePayment,
+		repository.NewShipmentRepository(dbx),
 	)
 
 	orderHandler := handler.NewOrderHandler(orchestrator, dbx, stepRepo)
