@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"axiom-flow/internal/domain"
 
@@ -74,6 +75,34 @@ func (r *SagaStepRepository) ListByOrder(ctx context.Context, orderID int) ([]*d
 	err := r.ext.SelectContext(ctx, &steps, query, orderID)
 	if err != nil {
 		return nil, fmt.Errorf("listing saga steps: %w", err)
+	}
+	return steps, nil
+}
+
+// UpdateRetryInfo updates retry_count and next_retry_at for a saga step.
+func (r *SagaStepRepository) UpdateRetryInfo(ctx context.Context, ext extTx, id int, retryCount int, nextRetryAt *time.Time) error {
+	query := `UPDATE saga_steps SET retry_count = $1, next_retry_at = $2 WHERE id = $3`
+	_, err := ext.ExecContext(ctx, query, retryCount, nextRetryAt, id)
+	if err != nil {
+		return fmt.Errorf("updating retry info for saga step %d: %w", id, err)
+	}
+	return nil
+}
+
+// GetStepsReadyForRetry retrieves saga steps that are ready to be retried:
+// status IN_PROGRESS, next_retry_at <= now, and retry_count < maxRetries.
+func (r *SagaStepRepository) GetStepsReadyForRetry(ctx context.Context, maxRetries int) ([]*domain.SagaStep, error) {
+	var steps []*domain.SagaStep
+	query := `SELECT id, order_id, step_name, status, attempt, retry_count, idempotency_key, operation_key, started_at, next_retry_at, finished_at 
+	          FROM saga_steps 
+	          WHERE status = $1 
+	            AND next_retry_at IS NOT NULL 
+	            AND next_retry_at <= NOW() 
+	            AND retry_count < $2
+	          ORDER BY next_retry_at ASC`
+	err := r.ext.SelectContext(ctx, &steps, query, domain.SagaStatusInProgress, maxRetries)
+	if err != nil {
+		return nil, fmt.Errorf("getting steps ready for retry: %w", err)
 	}
 	return steps, nil
 }

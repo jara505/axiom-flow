@@ -1,8 +1,13 @@
 package main
 
 import (
+	"context"
 	"log/slog"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"axiom-flow/internal/db"
 	"axiom-flow/internal/handler"
@@ -27,6 +32,9 @@ func main() {
 	dbx := sqlx.NewDb(sqlDB, "pgx")
 
 	stepRepo := repository.NewSagaStepRepository(dbx)
+	paymentRepo := repository.NewPaymentRepository(dbx)
+
+	metrics := handler.NewMetrics()
 
 	fakePayment := service.NewFakePaymentProvider()
 
@@ -36,11 +44,30 @@ func main() {
 		service.StubInventoryOwner{},
 		fakePayment,
 		repository.NewShipmentRepository(dbx),
+		3, // maxRetries
 	)
 
-	orderHandler := handler.NewOrderHandler(orchestrator, dbx, stepRepo)
+	// Recovery worker para reintentar pasos fallidos por timeout
+	recoveryWorker := service.NewRecoveryWorker(dbx, stepRepo, orchestrator, 10*time.Second)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	go recoveryWorker.Start(ctx)
+
+	// Middleware de idempotencia
+	idempotencyMiddleware := handler.NewIdempotencyMiddleware(dbx, stepRepo, paymentRepo)
+
+	// Middleware de request ID y logging estructurado
+	requestIDMiddleware := handler.NewRequestIDMiddleware()
+
+	// Health handler con métricas
+	healthHandler := handler.NewHealthHandler(dbx, metrics)
+
+	orderHandler := handler.NewOrderHandler(orchestrator, dbx, stepRepo, metrics)
 
 	r := gin.Default()
+	r.Use(requestIDMiddleware.Middleware())
+	r.Use(idempotencyMiddleware.Middleware())
+	r.GET("/health", healthHandler.Health)
 	r.POST("/orders", orderHandler.CreateOrder)
 	r.GET("/orders/:id/saga", orderHandler.GetSaga)
 
@@ -49,9 +76,27 @@ func main() {
 		port = "8080"
 	}
 
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: r,
+	}
+
+	// Graceful shutdown: esperar a que terminen peticiones en curso
+	go func() {
+		<-ctx.Done()
+		slog.Info("shutting down server gracefully...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			slog.Error("server shutdown error", "error", err)
+		}
+	}()
+
 	slog.Info("server starting", "port", port)
-	if err := r.Run(":" + port); err != nil {
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("server error", "error", err)
 		os.Exit(1)
 	}
+
+	slog.Info("server stopped")
 }

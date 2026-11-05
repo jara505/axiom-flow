@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"axiom-flow/internal/domain"
 	"axiom-flow/internal/repository"
@@ -16,14 +17,16 @@ type OrderHandler struct {
 	orchestrator *service.Orchestrator
 	db           *sqlx.DB
 	stepRepo     *repository.SagaStepRepository
+	metrics      *Metrics
 }
 
 // NewOrderHandler creates a new OrderHandler instance.
-func NewOrderHandler(orchestrator *service.Orchestrator, db *sqlx.DB, stepRepo *repository.SagaStepRepository) *OrderHandler {
+func NewOrderHandler(orchestrator *service.Orchestrator, db *sqlx.DB, stepRepo *repository.SagaStepRepository, metrics *Metrics) *OrderHandler {
 	return &OrderHandler{
 		orchestrator: orchestrator,
 		db:           db,
 		stepRepo:     stepRepo,
+		metrics:      metrics,
 	}
 }
 
@@ -32,6 +35,8 @@ type CreateOrderRequest struct {
 	CustomerID    int     `json:"customer_id" binding:"required"`
 	OrderNumber   string  `json:"order_number" binding:"required"`
 	Total         float64 `json:"total" binding:"required,gt=0"`
+	ProductID     int     `json:"product_id" binding:"required,gt=0"`
+	Quantity      int     `json:"quantity" binding:"required,gt=0"`
 	IdempotencyKey string `json:"idempotency_key" binding:"required"`
 }
 
@@ -51,14 +56,24 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		req.CustomerID, req.OrderNumber, req.IdempotencyKey, "PENDING_PAYMENT", req.Total, req.Total).
 		Scan(&orderID)
 	if err != nil {
+		h.metrics.IncOrdersFailed()
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := h.orchestrator.ExecuteForward(c.Request.Context(), orderID); err != nil {
+	start := time.Now()
+
+	if err := h.orchestrator.ExecuteForward(c.Request.Context(), orderID, req.Total, req.ProductID, req.Quantity); err != nil {
+		h.metrics.IncOrdersFailed()
+		durationMs := float64(time.Since(start).Milliseconds())
+		h.metrics.RecordSagaDuration(durationMs)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "order_id": orderID})
 		return
 	}
+
+	durationMs := float64(time.Since(start).Milliseconds())
+	h.metrics.IncOrdersCreated()
+	h.metrics.RecordSagaDuration(durationMs)
 
 	c.JSON(http.StatusCreated, gin.H{"order_id": orderID, "status": "saga_started"})
 }

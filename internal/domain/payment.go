@@ -13,6 +13,6 @@ type Payment struct {
 	Currency       string    `db:"currency" json:"currency"`
 	Method         string    `db:"method" json:"method"`
 	Provider       string    `db:"provider" json:"provider"`
-	Status         string    `db:"status" json:"status"`
+	Status         PaymentStatus `db:"status" json:"status"`
 	CreatedAt      time.Time `db:"created_at" json:"created_at"`
 }
