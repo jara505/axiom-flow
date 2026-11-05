@@ -42,8 +42,10 @@ type SagaStep struct {
 	StepName       string     `db:"step_name" json:"step_name"`
 	Status         SagaStatus `db:"status" json:"status"`
 	Attempt        int        `db:"attempt" json:"attempt"`
+	RetryCount     int        `db:"retry_count" json:"retry_count"`
 	IdempotencyKey string     `db:"idempotency_key" json:"idempotency_key"`
 	OperationKey   string     `db:"operation_key" json:"operation_key"`
 	StartedAt      time.Time  `db:"started_at" json:"started_at"`
+	NextRetryAt    *time.Time `db:"next_retry_at" json:"next_retry_at,omitempty"`
 	FinishedAt     *time.Time `db:"finished_at" json:"finished_at,omitempty"`
 }
