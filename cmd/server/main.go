@@ -17,6 +17,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/jmoiron/sqlx"
+
+	"axiom-flow/internal/handler/ratelimit"
 )
 
 func main() {
@@ -59,6 +61,9 @@ func main() {
 	// Middleware de request ID y logging estructurado
 	requestIDMiddleware := handler.NewRequestIDMiddleware()
 
+	// Rate limiting: 60 peticiones por minuto por IP (in-memory, sin dependencias externas)
+	rateLimiter := ratelimit.NewInMemoryRateLimiter(60, 1*time.Minute)
+
 	// Health handler con métricas
 	healthHandler := handler.NewHealthHandler(dbx, metrics)
 
@@ -67,6 +72,7 @@ func main() {
 	r := gin.Default()
 	r.Use(requestIDMiddleware.Middleware())
 	r.Use(idempotencyMiddleware.Middleware())
+	r.Use(ratelimit.RateLimitMiddleware(rateLimiter))
 	r.GET("/health", healthHandler.Health)
 	r.POST("/orders", orderHandler.CreateOrder)
 	r.GET("/orders/:id/saga", orderHandler.GetSaga)
