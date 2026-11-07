@@ -50,6 +50,7 @@ El software contiene las restricciones que la arquitectura menciona sobre lo que
 | Tipo fuerte `SagaStatus` en Go (evita strings sueltos) | `internal/domain/models.go` | Sí, en Go. |
 | Update atómico `RESERVED → RELEASED` en misma transacción | `002_inventory_reservations.sql` | Parcial: `InventoryReservationRepository.Release` usa `*sqlx.Tx`, pero el orquestador no abre transacciones para agrupar pasos. |
 | No compensar `UNKNOWN` sin consultar | `04-casos-de-uso.md` | No implementado en Go (pendiente). |
+| Rate limiting por cliente con respuesta `429` y headers estandarizados | Decisión de diseño Fase 4 | Implementado: `internal/handler/ratelimit/` con interfaz `RateLimiter` (desacoplada de backend), implementación in-memory con limpieza periódica contra fugas de memoria, middleware Gin que responde `429 Too Many Requests` con JSON y headers `X-RateLimit-*` y `Retry-After`. |
 
 ---
 

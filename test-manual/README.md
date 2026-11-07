@@ -15,7 +15,7 @@ El sistema requiere `idempotency_key` en cada petición (campo obligatorio).
 ```bash
 curl -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
-  -d '{"customer_id":1,"order_number":"ORD-001","idempotency_key":"key-tc001","subtotal":99.99,"total":99.99}'
+  -d '{"customer_id":1,"order_number":"ORD-001","idempotency_key":"key-tc001","subtotal":99.99,"total":99.99,"product_id":1,"quantity":1}'
 ```
 #### **TC-001 - Flujo Complejo (Happy Path)** - Consultar saga:
 ```bash
@@ -25,19 +25,19 @@ curl http://localhost:8080/orders/1/saga
 ```bash
 curl -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
-  -d '{"customer_id":1,"order_number":"ORD-002","idempotency_key":"key-tc002","subtotal":99.99,"total":99.99}'
+  -d '{"customer_id":1,"order_number":"ORD-002","idempotency_key":"key-tc002","subtotal":99.99,"total":99.99,"product_id":1,"quantity":1}'
 ```
 #### **TC-002 - Idempotencia de Pago** - Segunda orden (mismo key):
 ```bash
 curl -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
-  -d '{"customer_id":1,"order_number":"ORD-003","idempotency_key":"key-tc002","subtotal":49.99,"total":49.99}'
+  -d '{"customer_id":1,"order_number":"ORD-003","idempotency_key":"key-tc002","subtotal":49.99,"total":49.99,"product_id":1,"quantity":1}'
 ```
 #### **TC-003 - Flujo con Pago Fallido**:
 ```bash
 curl -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
-  -d '{"customer_id":1,"order_number":"ORD-003","idempotency_key":"key-tc003","subtotal":99.99,"total":99.99}'
+  -d '{"customer_id":1,"order_number":"ORD-003","idempotency_key":"key-tc003","subtotal":99.99,"total":99.99,"product_id":1,"quantity":1}'
 ```
 #### **TC-004 - Consulta de Saga por ID**:
 ```bash
@@ -151,19 +151,19 @@ echo 'SELECT * FROM shipments WHERE order_id = 1;'
 ```bash
 curl -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
-  -d '{"customer_id":1,"order_number":"ORD-002","idempotency_key":"key-tc002","subtotal":99.99,"total":99.99}'
+  -d '{"customer_id":1,"order_number":"ORD-002","idempotency_key":"key-tc002","subtotal":99.99,"total":99.99,"product_id":1,"quantity":1}'
 ```
 #### **TC-002 - Idempotencia de Pago** - Segunda orden (mismo key):
 ```bash
 curl -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
-  -d '{"customer_id":1,"order_number":"ORD-003","idempotency_key":"key-tc002","subtotal":49.99,"total":49.99}'
+  -d '{"customer_id":1,"order_number":"ORD-003","idempotency_key":"key-tc002","subtotal":49.99,"total":49.99,"product_id":1,"quantity":1}'
 ```
 #### **TC-003 - Flujo con Pago Fallido**:
 ```bash
 curl -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
-  -d '{"customer_id":1,"order_number":"ORD-003","idempotency_key":"key-tc003","subtotal":99.99,"total":99.99}'
+  -d '{"customer_id":1,"order_number":"ORD-003","idempotency_key":"key-tc003","subtotal":99.99,"total":99.99,"product_id":1,"quantity":1}'
 ```
 #### **TC-004 - Consulta de Saga por ID**:
 ```bash
@@ -210,6 +210,48 @@ echo 'SELECT * FROM shipments WHERE order_id = 1;'
    - **Esperado**: En la base de datos, la tabla `shipments` debe tener un registro con `order_id` correspondiente y status `SHIPPED`.
    - **Tipo de Prueba**: Base de datos / Almacenamiento
    - **Observaciones**: 
+
+#### [x] **TC-006: Retry con Backoff Exponencial**
+   - **Descripción**: Forzar un fallo transitorio en un paso (ej. pago rechazado temporalmente) y verificar que el sistema programa un reintento con `next_retry_at` en lugar de fallar inmediatamente.
+   - **Petición**: Ejecutar TC-001 con un `idempotency_key` nuevo; si el pago falla por timeout simulado, verificar que `saga_steps` tiene `retry_count = 1` y `next_retry_at` con una hora futura.
+   - **Esperado**: La saga no falla inmediatamente; el paso queda `IN_PROGRESS` con `next_retry_at` programado. El recovery worker debe reintentarlo automáticamente después del intervalo.
+   - **Tipo de Prueba**: Resiliencia / Retry
+   - **Observaciones**: Verificar columnas `retry_count` y `next_retry_at` en tabla `saga_steps`.
+
+#### [x] **TC-007: Worker de Recuperación Automática**
+   - **Descripción**: Verificar que el worker de recuperación (ejecutándose cada 10s) retoma pasos pendientes de retry y los completa.
+   - **Petición**: Crear una orden donde un paso falle y quede programado para retry; esperar al menos 10 segundos; verificar que el paso se ejecutó y pasó a `COMPLETED`.
+   - **Esperado**: Después del intervalo del worker, el paso previamente fallido pasa a `COMPLETED` y la saga continúa normalmente.
+   - **Tipo de Prueba**: Resiliencia / Recuperación Automática
+   - **Observaciones**: El worker se inicia automáticamente al levantar el servidor.
+
+#### [x] **TC-008: Health Check**
+   - **Descripción**: Verificar que el servicio responde y la base de datos está accesible.
+   - **Petición:**
+   ```bash
+   curl http://localhost:8080/health
+   ```
+   - **Esperado**: JSON con `status: "up"`, métricas de órdenes creadas/fallidas, y timestamp.
+   - **Tipo de Prueba**: Operacional / Infraestructura
+   - **Observaciones**: 
+
+#### [x] **TC-010: Rate Limiting (429 Too Many Requests)**
+   - **Descripción**: Verificar que el servidor limita peticiones por IP y devuelve `429` cuando se supera el límite, con headers y cuerpo JSON informativos.
+   - **Petición:** Realizar más de 60 peticiones rápidas a `http://localhost:8080/health` desde la misma IP.
+   - **Esperado**: Después de 60 peticiones en una ventana de 1 minuto, el servidor responde con HTTP `429`, headers `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Retry-After`, y cuerpo JSON con `error: "rate_limit_exceeded"`.
+   - **Tipo de Prueba**: Operacional / Protección de API
+   - **Observaciones**: Límite configurado: 60 peticiones por minuto por IP (in-memory). Evadir vía VPN está fuera del alcance del MVP.
+
+#### [x] **TC-009: Request ID en logs**
+   - **Descripción**: Verificar que cada petición devuelve un header `X-Request-ID` único y que los logs incluyen ese ID.
+   - **Petición:**
+   ```bash
+   curl -v http://localhost:8080/health
+   ```
+   - **Esperado**: La respuesta incluye `x-request-id` con un UUID. Los logs del servidor muestran ese mismo ID asociado a la petición.
+   - **Tipo de Prueba**: Trazabilidad / Observabilidad
+   - **Observaciones**: 
+
 ---### Instrucciones Generales
 1. **Limpiar Base de Datos entre pruebas**:
    ```bash

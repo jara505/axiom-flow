@@ -21,6 +21,7 @@ El objetivo principal es estudiar y demostrar el manejo de:
 * ⚡ **Fallos parciales** — cuando algunas operaciones se completan y otras no.
 * 🔄 **Compensaciones (Saga)** — deshacer efectos de operaciones ya realizadas ante un fallo.
 * 🛡️ **Idempotencia** — evitar efectos duplicados ante reintentos o solicitudes repetidas.
+* 🚦 **Rate limiting** — proteger la API contra abuso y saturación por exceso de peticiones (respuesta `429 Too Many Requests`).
 * 📊 **Estado de ejecución** — persistir y consultar el progreso de una Saga de larga duración.
 * 🧪 **Escenarios de fallo** — reproducir y verificar comportamiento ante interrupciones.
 
