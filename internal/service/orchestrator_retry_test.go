@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"axiom-flow/internal/domain"
@@ -34,17 +35,28 @@ func (s *stubInventoryOwner) Release(orderID int) error {
 	return nil
 }
 
+// stubShipmentGateway nunca falla en Create para los tests de unidad.
+type stubShipmentGateway struct{}
+
+func (s *stubShipmentGateway) Create(orderID int, address string) (string, error) {
+	return "track-" + fmt.Sprintf("%d", orderID), nil
+}
+
+func (s *stubShipmentGateway) GetByOrder(orderID int) (*domain.Shipment, error) {
+	return nil, nil
+}
+
 // newTestOrchestrator crea un Orchestrator con los dueños proporcionados.
 // db, stepRepo y shipmentRepo se dejan en nil porque executeStep no los usa
 // en los pasos probados (RESERVE_INVENTORY, CREATE_ORDER, PROCESS_PAYMENT).
 func newTestOrchestrator(payment domain.PaymentOwner, inventory domain.InventoryOwner) *Orchestrator {
 	return &Orchestrator{
-		db:           nil,
-		stepRepo:     nil,
-		inventory:    inventory,
-		payment:      payment,
-		shipmentRepo: nil,
-		maxRetries:   3,
+		db:        nil,
+		stepRepo:  nil,
+		inventory: inventory,
+		payment:   payment,
+		shipment:  &stubShipmentGateway{},
+		maxRetries: 3,
 	}
 }
 
