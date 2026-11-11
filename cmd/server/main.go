@@ -40,12 +40,18 @@ func main() {
 
 	fakePayment := service.NewFakePaymentProvider()
 
+	shipment, err := service.NewAdaptiveShipmentGatewayFromEnv(dbx)
+	if err != nil {
+		slog.Error("cannot create shipment gateway", "error", err)
+		os.Exit(1)
+	}
+
 	orchestrator := service.NewOrchestrator(
 		dbx,
 		stepRepo,
 		service.StubInventoryOwner{},
 		fakePayment,
-		repository.NewShipmentRepository(dbx),
+		shipment,
 		3, // maxRetries
 	)
 

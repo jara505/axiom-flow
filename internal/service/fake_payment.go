@@ -50,8 +50,8 @@ func (s StubInventoryOwner) Release(orderID int) error {
 	return nil
 }
 
-type StubShipmentOwner struct{}
+type StubShipmentGateway struct{}
 
-func (s StubShipmentOwner) Create(orderID int, address string) (string, error) {
+func (s StubShipmentGateway) Create(orderID int, address string) (string, error) {
 	return "created", nil
 }
