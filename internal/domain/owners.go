@@ -13,7 +13,9 @@ type PaymentOwner interface {
 	ConsultarPorClave(key string) (*Payment, error)
 }
 
-// ShipmentOwner is a stub owner for shipment creation.
-type ShipmentOwner interface {
+// ShipmentGateway is the abstraction for shipment management.
+// Implementations can be local (DB) or remote (HTTP to another service).
+type ShipmentGateway interface {
 	Create(orderID int, address string) (string, error)
+	GetByOrder(orderID int) (*Shipment, error)
 }
