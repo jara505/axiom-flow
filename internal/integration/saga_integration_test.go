@@ -67,11 +67,12 @@ func newTestRouter(t *testing.T, payment domain.PaymentOwner) routerFixture {
 		stepRepo,
 		service.StubInventoryOwner{},
 		payment,
-		repository.NewShipmentRepository(dbx),
+		service.NewShipmentLocal(repository.NewShipmentRepository(dbx)),
 	)
 
 	r := gin.New()
-	orderHandler := handler.NewOrderHandler(orch, dbx, stepRepo)
+	metrics := handler.NewMetrics()
+	orderHandler := handler.NewOrderHandler(orch, dbx, stepRepo, metrics)
 	r.POST("/orders", orderHandler.CreateOrder)
 	r.GET("/orders/:id/saga", orderHandler.GetSaga)
 
