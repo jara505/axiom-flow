@@ -1,0 +1,45 @@
+services:
+  shipment-db:
+    image: postgres:15-alpine
+    container_name: axiom-shipment-db
+    environment:
+      POSTGRES_USER: axiom_user
+      POSTGRES_PASSWORD: axiom_flow
+      POSTGRES_DB: shipment_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - shipment-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U axiom_user -d shipment_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  shipment-service:
+    build:
+      context: services/shipment
+      dockerfile: Dockerfile
+    container_name: axiom-shipment-service
+    depends_on:
+      shipment-db:
+        condition: service_healthy
+    environment:
+      DB_HOST: shipment-db
+      DB_PORT: "5432"
+      DB_USER: axiom_user
+      DB_PASSWORD: axiom_flow
+      DB_NAME: shipment_db
+      DB_SSL_MODE: disable
+      APP_PORT: "8081"
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  shipment-db-data:
