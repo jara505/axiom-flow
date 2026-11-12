@@ -44,7 +44,11 @@ type CreateOrderRequest struct {
 func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	var req CreateOrderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:     "invalid_request",
+			Message:   err.Error(),
+			Timestamp: now(),
+		})
 		return
 	}
 
@@ -57,7 +61,12 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		Scan(&orderID)
 	if err != nil {
 		h.metrics.IncOrdersFailed()
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		c.JSON(http.StatusConflict, ErrorResponse{
+			Error:     "order_creation_failed",
+			Message:   err.Error(),
+			OrderID:   &orderID,
+			Timestamp: now(),
+		})
 		return
 	}
 
@@ -67,7 +76,12 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		h.metrics.IncOrdersFailed()
 		durationMs := float64(time.Since(start).Milliseconds())
 		h.metrics.RecordSagaDuration(durationMs)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "order_id": orderID})
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Error:     "saga_execution_failed",
+			Message:   err.Error(),
+			OrderID:   &orderID,
+			Timestamp: now(),
+		})
 		return
 	}
 
@@ -75,20 +89,34 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	h.metrics.IncOrdersCreated()
 	h.metrics.RecordSagaDuration(durationMs)
 
-	c.JSON(http.StatusCreated, gin.H{"order_id": orderID, "status": "saga_started"})
+	c.JSON(http.StatusCreated, OrderResponse{
+		OrderID:   orderID,
+		Status:    "saga_started",
+		Message:   "Order created and saga started",
+		Timestamp: now(),
+	})
 }
 
 // GetSaga returns all saga steps of an order.
 func (h *OrderHandler) GetSaga(c *gin.Context) {
 	var orderID int
 	if _, err := fmt.Sscanf(c.Param("id"), "%d", &orderID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		c.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:     "invalid_id",
+			Message:   "the order id must be a number",
+			Timestamp: now(),
+		})
 		return
 	}
 
 	steps, err := h.stepRepo.ListByOrder(c.Request.Context(), orderID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Error:     "saga_query_failed",
+			Message:   err.Error(),
+			OrderID:   &orderID,
+			Timestamp: now(),
+		})
 		return
 	}
 
@@ -96,8 +124,22 @@ func (h *OrderHandler) GetSaga(c *gin.Context) {
 		steps = []*domain.SagaStep{}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"order_id": orderID,
-		"steps":    steps,
+	stepResponses := make([]SagaStepResponse, len(steps))
+	for i, s := range steps {
+		stepResponses[i] = SagaStepResponse{
+			ID:        s.ID,
+			OrderID:   s.OrderID,
+			StepName:  s.StepName,
+			Status:    string(s.Status),
+			Attempt:   s.Attempt,
+			StartedAt: s.StartedAt,
+			FinishedAt: s.FinishedAt,
+		}
+	}
+
+	c.JSON(http.StatusOK, SagaResponse{
+		OrderID: orderID,
+		Steps:   stepResponses,
+		Message: "saga steps retrieved",
 	})
 }
