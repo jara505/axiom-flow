@@ -38,7 +38,8 @@ func main() {
 
 	metrics := handler.NewMetrics()
 
-	fakePayment := service.NewFakePaymentProvider()
+	paymentURL := getEnv("PAYMENT_SERVICE_URL", "http://localhost:8083")
+	payment := service.NewPaymentRemote(paymentURL)
 
 	shipment, err := service.NewAdaptiveShipmentGatewayFromEnv(dbx)
 	if err != nil {
@@ -46,11 +47,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	inventory, err := service.NewAdaptiveInventoryGatewayFromEnv(dbx)
+	if err != nil {
+		slog.Error("cannot create inventory gateway", "error", err)
+		os.Exit(1)
+	}
+
 	orchestrator := service.NewOrchestrator(
 		dbx,
 		stepRepo,
-		service.StubInventoryOwner{},
-		fakePayment,
+		inventory,
+		payment,
 		shipment,
 		3, // maxRetries
 	)
@@ -67,8 +74,8 @@ func main() {
 	// Middleware de request ID y logging estructurado
 	requestIDMiddleware := handler.NewRequestIDMiddleware()
 
-	// Rate limiting: 60 peticiones por minuto por IP (in-memory, sin dependencias externas)
-	rateLimiter := ratelimit.NewInMemoryRateLimiter(60, 1*time.Minute)
+	// Rate limiting: 5 peticiones por segundo por IP (in-memory, sin dependencias externas)
+	rateLimiter := ratelimit.NewInMemoryRateLimiter(5, 1*time.Second)
 
 	// Health handler con métricas
 	healthHandler := handler.NewHealthHandler(dbx, metrics)
@@ -111,4 +118,11 @@ func main() {
 	}
 
 	slog.Info("server stopped")
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
