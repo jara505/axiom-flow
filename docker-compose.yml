@@ -2,16 +2,17 @@ services:
   shipment-db:
     image: postgres:15-alpine
     container_name: axiom-shipment-db
+    env_file: .env
     environment:
-      POSTGRES_USER: axiom_user
-      POSTGRES_PASSWORD: axiom_flow
-      POSTGRES_DB: shipment_db
+      POSTGRES_USER: ${SHIPMENT_DB_USER}
+      POSTGRES_PASSWORD: ${SHIPMENT_DB_PASSWORD}
+      POSTGRES_DB: ${SHIPMENT_DB_NAME}
     ports:
       - "5433:5432"
     volumes:
       - shipment-db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U axiom_user -d shipment_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${SHIPMENT_DB_USER} -d ${SHIPMENT_DB_NAME}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -21,15 +22,16 @@ services:
       context: services/shipment
       dockerfile: Dockerfile
     container_name: axiom-shipment-service
+    env_file: .env
     depends_on:
       shipment-db:
         condition: service_healthy
     environment:
       DB_HOST: shipment-db
       DB_PORT: "5432"
-      DB_USER: axiom_user
-      DB_PASSWORD: axiom_flow
-      DB_NAME: shipment_db
+      DB_USER: ${SHIPMENT_DB_USER}
+      DB_PASSWORD: ${SHIPMENT_DB_PASSWORD}
+      DB_NAME: ${SHIPMENT_DB_NAME}
       DB_SSL_MODE: disable
       APP_PORT: "8081"
     ports:
@@ -41,5 +43,103 @@ services:
       retries: 3
     restart: unless-stopped
 
+  inventory-db:
+    image: postgres:15-alpine
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${INVENTORY_DB_USER}
+      POSTGRES_PASSWORD: ${INVENTORY_DB_PASSWORD}
+      POSTGRES_DB: ${INVENTORY_DB_NAME}
+    ports:
+      - "5434:5432"
+    volumes:
+      - inventory-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${INVENTORY_DB_USER} -d ${INVENTORY_DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  inventory-service:
+    build:
+      context: ./services/inventory
+      dockerfile: Dockerfile
+    container_name: axiom-inventory-service
+    ports:
+      - "8082:8082"
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8082/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  payment-service:
+    build:
+      context: ./services/payment
+      dockerfile: Dockerfile
+    container_name: axiom-payment-service
+    ports:
+      - "8083:8083"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8083/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  axiom-db:
+    image: postgres:15-alpine
+    container_name: axiom-db
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "5435:5432"
+    volumes:
+      - axiom-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  axiom-flow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: axiom-flow
+    env_file: .env
+    depends_on:
+      axiom-db:
+        condition: service_healthy
+      shipment-service:
+        condition: service_healthy
+      inventory-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+    environment:
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      DB_SSL_MODE: ${DB_SSL_MODE}
+      APP_PORT: ${APP_PORT}
+      SHIPMENT_REMOTE_URL: ${SHIPMENT_REMOTE_URL}
+      INVENTORY_REMOTE_URL: ${INVENTORY_REMOTE_URL}
+      PAYMENT_SERVICE_URL: ${PAYMENT_SERVICE_URL}
+    ports:
+      - "${APP_PORT}:8080"
+    restart: unless-stopped
+
 volumes:
   shipment-db-data:
+  inventory-db-data:
+  axiom-db-data:
