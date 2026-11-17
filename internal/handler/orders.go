@@ -127,13 +127,15 @@ func (h *OrderHandler) GetSaga(c *gin.Context) {
 	stepResponses := make([]SagaStepResponse, len(steps))
 	for i, s := range steps {
 		stepResponses[i] = SagaStepResponse{
-			ID:        s.ID,
-			OrderID:   s.OrderID,
-			StepName:  s.StepName,
-			Status:    string(s.Status),
-			Attempt:   s.Attempt,
-			StartedAt: s.StartedAt,
-			FinishedAt: s.FinishedAt,
+			ID:             s.ID,
+			OrderID:        s.OrderID,
+			StepName:       s.StepName,
+			Status:         string(s.Status),
+			Attempt:        s.Attempt,
+			IdempotencyKey: s.IdempotencyKey,
+			OperationKey:   s.OperationKey,
+			StartedAt:      s.StartedAt,
+			FinishedAt:     s.FinishedAt,
 		}
 	}
 

@@ -41,11 +41,8 @@ func main() {
 	paymentURL := getEnv("PAYMENT_SERVICE_URL", "http://localhost:8083")
 	payment := service.NewPaymentRemote(paymentURL)
 
-	shipment, err := service.NewAdaptiveShipmentGatewayFromEnv(dbx)
-	if err != nil {
-		slog.Error("cannot create shipment gateway", "error", err)
-		os.Exit(1)
-	}
+	shipmentURL := getEnv("SHIPMENT_REMOTE_URL", "http://localhost:8081")
+	shipment := service.NewShipmentRemote(shipmentURL)
 
 	inventory, err := service.NewAdaptiveInventoryGatewayFromEnv(dbx)
 	if err != nil {
