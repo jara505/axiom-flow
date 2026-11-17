@@ -14,13 +14,15 @@ type OrderResponse struct {
 
 // SagaStepResponse representa un paso de la saga en la respuesta.
 type SagaStepResponse struct {
-	ID          int       `json:"id"`
-	OrderID     int       `json:"order_id"`
-	StepName    string    `json:"step_name"`
-	Status      string    `json:"status"`
-	Attempt     int       `json:"attempt"`
-	StartedAt   time.Time `json:"started_at"`
-	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+	ID              int       `json:"id"`
+	OrderID         int       `json:"order_id"`
+	StepName        string    `json:"step_name"`
+	Status          string    `json:"status"`
+	Attempt         int       `json:"attempt"`
+	IdempotencyKey  string    `json:"idempotency_key"`
+	OperationKey    string    `json:"operation_key"`
+	StartedAt       time.Time `json:"started_at"`
+	FinishedAt      *time.Time `json:"finished_at,omitempty"`
 }
 
 // SagaResponse es la respuesta de consulta de saga.
