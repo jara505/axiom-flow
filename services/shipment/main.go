@@ -110,11 +110,14 @@ func initSchema() error {
 }
 
 func createShipment(w http.ResponseWriter, r *http.Request) {
+	log.Printf("POST /shipments - body: %v", r.Body)
 	var req CreateShipmentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("Error decoding request: %v", err)
 		http.Error(w, `{"error":"payload invalido"}`, http.StatusBadRequest)
 		return
 	}
+	log.Printf("Creating shipment for order_id=%d address=%s", req.OrderID, req.Address)
 
 	var id int
 	err := db.QueryRow(
