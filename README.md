@@ -19,7 +19,7 @@ Cada microservicio es autónomo y posee su propia base de datos PostgreSQL, elim
 
 ## Arquitectura
 
-[diagram.png](diagram.png)
+![diagram.png](diagram.png)
 
 ---
 
