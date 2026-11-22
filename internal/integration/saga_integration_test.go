@@ -12,7 +12,6 @@ package integration_test
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -67,7 +66,7 @@ func newTestRouter(t *testing.T, payment domain.PaymentOwner) routerFixture {
 		stepRepo,
 		service.StubInventoryOwner{},
 		payment,
-		service.NewShipmentLocal(repository.NewShipmentRepository(dbx)),
+		&stubShipmentGateway{},
 	)
 
 	r := gin.New()
@@ -77,6 +76,17 @@ func newTestRouter(t *testing.T, payment domain.PaymentOwner) routerFixture {
 	r.GET("/orders/:id/saga", orderHandler.GetSaga)
 
 	return routerFixture{router: r, dbx: dbx}
+}
+
+// stubShipmentGateway provides a local stub for integration tests.
+type stubShipmentGateway struct{}
+
+func (stubShipmentGateway) Create(orderID int, address string) (string, error) {
+	return fmt.Sprintf("track-%d", orderID), nil
+}
+
+func (stubShipmentGateway) GetByOrder(orderID int) (*domain.Shipment, error) {
+	return nil, nil
 }
 
 // reset limpia las tablas entre pruebas (equivalente manual a TRUNCATE ... RESTART IDENTITY).
@@ -157,7 +167,7 @@ func TestTC001_HappyPath(t *testing.T) {
 	assertDB(t, f)
 	f.reset(t)
 
-	w := postOrder(f, `{"customer_id":1,"order_number":"ORD-001","idempotency_key":"key-tc001","subtotal":99.99,"total":99.99}`)
+	w := postOrder(f, `{"customer_id":1,"order_number":"ORD-001","idempotency_key":"key-tc001","subtotal":99.99,"total":99.99,"product_id":1,"quantity":1}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("TC-001 POST /orders: got status %d, want 201. Body: %s", w.Code, w.Body.String())
 	}
@@ -186,22 +196,22 @@ func TestTC001_HappyPath(t *testing.T) {
 		t.Fatalf("TC-001: expected 4 steps, got %d: %+v", total, steps)
 	}
 
-	// Los pasos esperados existen y están COMPLETED con attempt 1.
-	seen := map[string]bool{}
-	for _, s := range steps {
-		name, _ := s["step_name"].(string)
-		status, _ := s["status"].(string)
-		key, _ := s["idempotency_key"].(string)
-		seen[name] = true
+// Los pasos esperados existen y están COMPLETED con attempt 1.
+		seen := map[string]bool{}
+		for _, s := range steps {
+			name, _ := s["step_name"].(string)
+			status, _ := s["status"].(string)
+			key, _ := s["idempotency_key"].(string)
+			seen[name] = true
 
-		if status != "COMPLETED" {
-			t.Errorf("TC-001: step %s status = %s, want COMPLETED", name, status)
+			if status != "COMPLETED" {
+				t.Errorf("TC-001: step %s status = %s, want COMPLETED", name, status)
+			}
+			wantKey := fmt.Sprintf("%s-%d", name, int(s["order_id"].(float64)))
+			if key != wantKey {
+				t.Errorf("TC-001: idempotency_key for %s = %q, want %q", name, key, wantKey)
+			}
 		}
-		wantKey := fmt.Sprintf("order-%d-%s-attempt-1", int(s["order_id"].(float64)), name)
-		if key != wantKey {
-			t.Errorf("TC-001: idempotency_key for %s = %q, want %q", name, key, wantKey)
-		}
-	}
 	for _, want := range []string{"CREATE_ORDER", "RESERVE_INVENTORY", "PROCESS_PAYMENT", "CREATE_SHIPMENT"} {
 		if !seen[want] {
 			t.Errorf("TC-001: missing step %s", want)
@@ -219,8 +229,8 @@ func TestTC002_IdempotencyReentry(t *testing.T) {
 	assertDB(t, f)
 	f.reset(t)
 
-	body1 := `{"customer_id":1,"order_number":"ORD-002","idempotency_key":"key-tc002","subtotal":99.99,"total":99.99}`
-	body2 := `{"customer_id":2,"order_number":"ORD-003","idempotency_key":"key-tc002","subtotal":49.99,"total":49.99}`
+	body1 := `{"customer_id":1,"order_number":"ORD-002","idempotency_key":"key-tc002","subtotal":99.99,"total":99.99,"product_id":1,"quantity":1}`
+	body2 := `{"customer_id":2,"order_number":"ORD-003","idempotency_key":"key-tc002","subtotal":49.99,"total":49.99,"product_id":1,"quantity":1}`
 
 	w1 := postOrder(f, body1)
 	if w1.Code != http.StatusCreated {
@@ -248,17 +258,15 @@ func TestTC002_IdempotencyReentry(t *testing.T) {
 }
 
 // TC-003: Flujo con pago fallido.
-// Comportamiento real del MVP: ExecuteForward hace rollback de toda la
-// transacción, por lo que los pasos previos NO quedan persistidos (en
-// contraste con lo esperado en el README manual) y CREATE_SHIPMENT no se
-// ejecuta. Si la saga quedó FAILED o compensada quedará registrado solo
-// si la transacción se hubiese confirmado por etapas.
+// Nuevo comportamiento (Saga por pasos): cada paso se persiste individualmente.
+// Al fallar PROCESS_PAYMENT, se ejecutan las compensaciones en orden inverso
+// (RELEASE_INVENTORY, CREATE_ORDER cancelado) y CREATE_SHIPMENT no se ejecuta.
 func TestTC003_PaymentFailed(t *testing.T) {
 	f := newTestRouter(t, failingPayment{})
 	assertDB(t, f)
 	f.reset(t)
 
-	w := postOrder(f, `{"customer_id":1,"order_number":"ORD-003B","idempotency_key":"key-tc003","subtotal":99.99,"total":99.99}`)
+	w := postOrder(f, `{"customer_id":1,"order_number":"ORD-003B","idempotency_key":"key-tc003","subtotal":99.99,"total":99.99,"product_id":1,"quantity":1}`)
 	// La orden se crea, pero la saga falla → 500 con order_id para diagnósticos.
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("TC-003: got status %d, want 500. Body: %s", w.Code, w.Body.String())
@@ -271,8 +279,25 @@ func TestTC003_PaymentFailed(t *testing.T) {
 	}
 
 	steps := stepsByOrder(t, f, body.OrderID)
-	if got := len(steps); got != 0 {
-		t.Errorf("TC-003: saga steps persisted = %d, want 0 (transaction rolled back on failure)", got)
+	// Deben persistirse 3 pasos: CREATE_ORDER, RESERVE_INVENTORY, PROCESS_PAYMENT
+	if got := len(steps); got != 3 {
+		t.Errorf("TC-003: saga steps persisted = %d, want 3 (CREATE_ORDER, RESERVE_INVENTORY, PROCESS_PAYMENT)", got)
+	}
+
+	// Verificar estados: CREATE_ORDER=COMPLETED, RESERVE_INVENTORY=COMPLETED, PROCESS_PAYMENT=FAILED
+	expected := map[string]domain.SagaStatus{
+		"CREATE_ORDER":        domain.SagaStatusCompleted,
+		"RESERVE_INVENTORY":   domain.SagaStatusCompleted,
+		"PROCESS_PAYMENT":     domain.SagaStatusFailed,
+	}
+	for _, s := range steps {
+		if expectedStatus, ok := expected[s.Name]; ok {
+			if s.Status != expectedStatus {
+				t.Errorf("TC-003: step %s status = %s, want %s", s.Name, s.Status, expectedStatus)
+			}
+		} else {
+			t.Errorf("TC-003: unexpected step %s", s.Name)
+		}
 	}
 
 	var orderCount int
@@ -283,6 +308,7 @@ func TestTC003_PaymentFailed(t *testing.T) {
 		t.Errorf("TC-003: order row missing; the error is returned but order must exist for diagnostics")
 	}
 
+	// CREATE_SHIPMENT no debe ejecutarse
 	var shipmentCount int
 	if err := f.dbx.QueryRow(`SELECT COUNT(*) FROM shipments WHERE order_id=$1`, body.OrderID).Scan(&shipmentCount); err != nil {
 		t.Fatal(err)
@@ -298,7 +324,7 @@ func TestTC004_SagaQueryStructure(t *testing.T) {
 	assertDB(t, f)
 	f.reset(t)
 
-	w := postOrder(f, `{"customer_id":7,"order_number":"ORD-004","idempotency_key":"key-tc004","subtotal":10.00,"total":10.00}`)
+	w := postOrder(f, `{"customer_id":7,"order_number":"ORD-004","idempotency_key":"key-tc004","subtotal":10.00,"total":10.00,"product_id":1,"quantity":1}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("TC-004: POST got %d, want 201. Body: %s", w.Code, w.Body.String())
 	}
@@ -342,11 +368,11 @@ func TestTC004_SagaQueryStructure(t *testing.T) {
 		if s.StepName == "" || s.IdempotencyKey == "" || s.OperationKey == "" {
 			t.Errorf("TC-004: step %+v missing required fields", s)
 		}
-		wantIDK := fmt.Sprintf("order-%d-%s-attempt-1", created.OrderID, s.StepName)
+		wantIDK := fmt.Sprintf("%s-%d", s.StepName, created.OrderID)
 		if s.IdempotencyKey != wantIDK {
 			t.Errorf("TC-004: idempotency_key = %q, want %q", s.IdempotencyKey, wantIDK)
 		}
-		wantOPK := fmt.Sprintf("order-%d-%s", created.OrderID, s.StepName)
+		wantOPK := fmt.Sprintf("%s-%d", s.StepName, created.OrderID)
 		if s.OperationKey != wantOPK {
 			t.Errorf("TC-004: operation_key = %q, want %q", s.OperationKey, wantOPK)
 		}
@@ -364,13 +390,15 @@ func TestTC004_SagaQueryStructure(t *testing.T) {
 	}
 }
 
-// TC-005: Creación de envío en la tabla shipments
+// TC-005: Verificar que el paso CREATE_SHIPMENT se ejecuta en la saga.
+// Nota: con la migración a shipment remoto, el envío se crea en la BD del
+// servicio remoto, no en la BD local. Este test verifica el paso en la saga.
 func TestTC005_ShipmentCreated(t *testing.T) {
 	f := newTestRouter(t, service.NewFakePaymentProvider())
 	assertDB(t, f)
 	f.reset(t)
 
-	w := postOrder(f, `{"customer_id":1,"order_number":"ORD-005","idempotency_key":"key-tc005","subtotal":99.99,"total":99.99}`)
+	w := postOrder(f, `{"customer_id":1,"order_number":"ORD-005","idempotency_key":"key-tc005","subtotal":99.99,"total":99.99,"product_id":1,"quantity":1}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("TC-005: POST got %d, want 201. Body: %s", w.Code, w.Body.String())
 	}
@@ -381,22 +409,27 @@ func TestTC005_ShipmentCreated(t *testing.T) {
 		t.Fatalf("TC-005: cannot decode order_id: %v", err)
 	}
 
-	var shipmentID int
-	var status string
-	var tracking string
-	err := f.dbx.QueryRow(`SELECT id, status, tracking_number FROM shipments WHERE order_id=$1`, created.OrderID).
-		Scan(&shipmentID, &status, &tracking)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			t.Fatalf("TC-005: no shipment created for order %d", created.OrderID)
+	// Verificar que el paso CREATE_SHIPMENT está en la saga
+	saga := getSaga(f, fmt.Sprintf("%d", created.OrderID))
+	if saga == nil {
+		t.Fatalf("TC-005: empty saga response")
+	}
+	var steps []map[string]interface{}
+	if err := json.Unmarshal(saga["steps"], &steps); err != nil {
+		t.Fatalf("TC-005: cannot decode steps: %v", err)
+	}
+
+	found := false
+	for _, s := range steps {
+		name, _ := s["step_name"].(string)
+		status, _ := s["status"].(string)
+		if name == "CREATE_SHIPMENT" && status == "COMPLETED" {
+			found = true
+			break
 		}
-		t.Fatalf("TC-005: querying shipment: %v", err)
 	}
-	if status != "SHIPPED" {
-		t.Errorf("TC-005: shipment status = %s, want SHIPPED", status)
-	}
-	if shipmentID == 0 || tracking == "" {
-		t.Errorf("TC-005: incomplete shipment record (id=%d tracking=%q)", shipmentID, tracking)
+	if !found {
+		t.Errorf("TC-005: CREATE_SHIPMENT step not found or not COMPLETED in saga")
 	}
 }
 
