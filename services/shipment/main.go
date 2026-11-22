@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -14,18 +15,20 @@ import (
 )
 
 type Shipment struct {
-	ID           int       `json:"id"`
-	OrderID      int       `db:"order_id" json:"order_id"`
-	TrackingNumber string   `db:"tracking_number" json:"tracking_number,omitempty"`
-	Status       string    `db:"status" json:"status"`
-	Address      string    `db:"address" json:"address,omitempty"`
-	CreatedAt    time.Time `db:"created_at" json:"created_at"`
+	ID             int       `json:"id"`
+	OrderID        int       `json:"order_id"`
+	TrackingNumber string   `json:"tracking_number,omitempty"`
+	Status         string    `json:"status"`
+	Address        string    `json:"address,omitempty"`
+	IdempotencyKey string   `json:"idempotency_key,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type CreateShipmentRequest struct {
-	OrderID    int    `json:"order_id"`
-	Address    string `json:"address"`
-	Method     string `json:"method,omitempty"`
+	OrderID        int    `json:"order_id"`
+	Address        string `json:"address"`
+	Method         string `json:"method,omitempty"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
 var db *sql.DB
@@ -57,6 +60,8 @@ func main() {
 	mux.HandleFunc("GET /envíos/{order_id}", getShipment)
 	mux.HandleFunc("POST /shipments", createShipment)
 	mux.HandleFunc("GET /health", health)
+	mux.HandleFunc("GET /api/openapi.yaml", openapiHandler)
+	mux.HandleFunc("GET /docs", docsHandler)
 
 	log.Printf("servicio shipment escuchando en :%s", port)
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
@@ -101,12 +106,41 @@ func initSchema() error {
 		tracking_number VARCHAR(100),
 		status VARCHAR(20) NOT NULL DEFAULT 'PENDIENTE',
 		address TEXT,
+		idempotency_key VARCHAR(255) UNIQUE,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_shipments_order_id ON shipments(order_id);
+	CREATE INDEX IF NOT EXISTS idx_shipments_idempotency_key ON shipments(idempotency_key);
+
+	CREATE TABLE IF NOT EXISTS outbox (
+	    id SERIAL PRIMARY KEY,
+	    aggregate_type VARCHAR(50) NOT NULL,
+	    aggregate_id INTEGER NOT NULL,
+	    event_type VARCHAR(100) NOT NULL,
+	    payload JSONB NOT NULL,
+	    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+	    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	    published_at TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status);
+	CREATE INDEX IF NOT EXISTS idx_outbox_created_at ON outbox(created_at);
 	`
 	_, err := db.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Migración para bases de datos existentes que ya tienen la tabla sin idempotency_key
+	_, err = db.Exec(`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(255)`)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_shipments_idempotency_key_unique ON shipments(idempotency_key)`)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func createShipment(w http.ResponseWriter, r *http.Request) {
@@ -119,23 +153,83 @@ func createShipment(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("Creating shipment for order_id=%d address=%s", req.OrderID, req.Address)
 
+	idempotencyKey := req.IdempotencyKey
+	if idempotencyKey == "" {
+		idempotencyKey = fmt.Sprintf("shipment-%d-%d", req.OrderID, time.Now().UnixNano())
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		http.Error(w, `{"error":"no se pudo iniciar transacción"}`, http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+
+	// 1. Idempotency: verificar si ya existe un envío con esta clave
+	var existingID int
+	var existingStatus string
+	err = tx.QueryRow(
+		`SELECT id, status FROM shipments WHERE idempotency_key = $1 FOR UPDATE`,
+		idempotencyKey,
+	).Scan(&existingID, &existingStatus)
+	if err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":           existingID,
+			"order_id":     req.OrderID,
+			"status":       existingStatus,
+			"idempotency_key": idempotencyKey,
+			"message":      "shipment already processed (idempotent)",
+		})
+		return
+	}
+	if err != sql.ErrNoRows {
+		http.Error(w, `{"error":"error verificando idempotencia"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// 2. Insertar nuevo envío dentro de la misma transacción
 	var id int
-	err := db.QueryRow(
-		`INSERT INTO shipments (order_id, address, status) VALUES ($1, $2, $3) RETURNING id`,
-		req.OrderID, req.Address, "PENDIENTE",
+	err = tx.QueryRow(
+		`INSERT INTO shipments (order_id, address, status, idempotency_key) VALUES ($1, $2, $3, $4) RETURNING id`,
+		req.OrderID, req.Address, "PENDIENTE", idempotencyKey,
 	).Scan(&id)
 	if err != nil {
 		http.Error(w, `{"error":"no se pudo crear el envio"}`, http.StatusInternalServerError)
 		return
 	}
 
+	// 3. Escribir evento en outbox dentro de la misma transacción
+	payload, _ := json.Marshal(map[string]interface{}{
+		"shipment_id":    id,
+		"order_id":       req.OrderID,
+		"status":         "PENDIENTE",
+		"idempotency_key": idempotencyKey,
+	})
+	_, err = tx.Exec(
+		`INSERT INTO outbox (aggregate_type, aggregate_id, event_type, payload, status)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		"shipment", id, "shipment.created", string(payload), "PENDING",
+	)
+	if err != nil {
+		http.Error(w, `{"error":"no se pudo escribir evento en outbox"}`, http.StatusInternalServerError)
+		return
+	}
+
+	if err = tx.Commit(); err != nil {
+		http.Error(w, `{"error":"no se pudo confirmar transacción"}`, http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"id":         id,
-		"order_id":   req.OrderID,
-		"status":     "PENDIENTE",
-		"message":    "envio creado correctamente",
+		"id":           id,
+		"order_id":     req.OrderID,
+		"status":       "PENDIENTE",
+		"idempotency_key": idempotencyKey,
+		"message":      "envio creado correctamente",
 	})
 }
 
@@ -144,9 +238,9 @@ func getShipment(w http.ResponseWriter, r *http.Request) {
 
 	var s Shipment
 	err := db.QueryRow(
-		`SELECT id, order_id, tracking_number, status, address, created_at FROM shipments WHERE order_id = $1`,
+		`SELECT id, order_id, tracking_number, status, address, idempotency_key, created_at FROM shipments WHERE order_id = $1`,
 		orderID,
-	).Scan(&s.ID, &s.OrderID, &s.TrackingNumber, &s.Status, &s.Address, &s.CreatedAt)
+	).Scan(&s.ID, &s.OrderID, &s.TrackingNumber, &s.Status, &s.Address, &s.IdempotencyKey, &s.CreatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			http.Error(w, `{"error":"envio no encontrado"}`, http.StatusNotFound)
@@ -173,4 +267,12 @@ func health(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "healthy", "db": "connected"})
+}
+
+func openapiHandler(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "../api/openapi.yaml")
+}
+
+func docsHandler(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "../api/swagger-ui.html")
 }

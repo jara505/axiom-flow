@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/jmoiron/sqlx"
+	"github.com/redis/go-redis/v9"
 
 	"axiom-flow/internal/handler/ratelimit"
 )
@@ -44,11 +45,7 @@ func main() {
 	shipmentURL := getEnv("SHIPMENT_REMOTE_URL", "http://localhost:8081")
 	shipment := service.NewShipmentRemote(shipmentURL)
 
-	inventory, err := service.NewAdaptiveInventoryGatewayFromEnv(dbx)
-	if err != nil {
-		slog.Error("cannot create inventory gateway", "error", err)
-		os.Exit(1)
-	}
+	inventory := service.NewInventoryRemote(getEnv("INVENTORY_REMOTE_URL", "http://localhost:8082"), nil)
 
 	orchestrator := service.NewOrchestrator(
 		dbx,
@@ -71,8 +68,11 @@ func main() {
 	// Middleware de request ID y logging estructurado
 	requestIDMiddleware := handler.NewRequestIDMiddleware()
 
-	// Rate limiting: 5 peticiones por segundo por IP (in-memory, sin dependencias externas)
-	rateLimiter := ratelimit.NewInMemoryRateLimiter(5, 1*time.Second)
+	// Rate limiting: conectar a Redis
+	rdb := redis.NewClient(&redis.Options{
+		Addr: getEnv("REDIS_ADDR", "localhost:6379"),
+	})
+	rateLimiter := ratelimit.NewRedisRateLimiter(rdb, 5, 1*time.Second, "ratelimit")
 
 	// Health handler con métricas
 	healthHandler := handler.NewHealthHandler(dbx, metrics)
@@ -86,6 +86,8 @@ func main() {
 	r.GET("/health", healthHandler.Health)
 	r.POST("/orders", orderHandler.CreateOrder)
 	r.GET("/orders/:id/saga", orderHandler.GetSaga)
+	r.StaticFile("/api/openapi.yaml", "./api/openapi.yaml")
+	r.StaticFile("/docs", "./api/swagger-ui.html")
 
 	port := os.Getenv("PORT")
 	if port == "" {

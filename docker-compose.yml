@@ -1,4 +1,15 @@
 services:
+  redis:
+    image: redis:alpine
+    container_name: axiom-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   shipment-db:
     image: postgres:15-alpine
     container_name: axiom-shipment-db
@@ -118,6 +129,8 @@ services:
     depends_on:
       axiom-db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       shipment-service:
         condition: service_healthy
       inventory-service:
@@ -135,6 +148,7 @@ services:
       SHIPMENT_REMOTE_URL: ${SHIPMENT_REMOTE_URL}
       INVENTORY_REMOTE_URL: ${INVENTORY_REMOTE_URL}
       PAYMENT_SERVICE_URL: ${PAYMENT_SERVICE_URL}
+      REDIS_ADDR: redis:6379
     ports:
       - "${APP_PORT}:8080"
     restart: unless-stopped

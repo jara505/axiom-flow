@@ -47,10 +47,10 @@ func (s *stubShipmentGateway) GetByOrder(orderID int) (*domain.Shipment, error) 
 }
 
 // newTestOrchestrator crea un Orchestrator con los dueños proporcionados.
-// db, stepRepo y shipmentRepo se dejan en nil porque executeStep no los usa
-// en los pasos probados (RESERVE_INVENTORY, CREATE_ORDER, PROCESS_PAYMENT).
+// db, stepRepo se dejan en nil porque los tests unitarios llaman a los
+// handlers de ejecución directa (exec*) que no usan BD.
 func newTestOrchestrator(payment domain.PaymentOwner, inventory domain.InventoryOwner) *Orchestrator {
-	return &Orchestrator{
+	o := &Orchestrator{
 		db:        nil,
 		stepRepo:  nil,
 		inventory: inventory,
@@ -58,17 +58,19 @@ func newTestOrchestrator(payment domain.PaymentOwner, inventory domain.Inventory
 		shipment:  &stubShipmentGateway{},
 		maxRetries: 3,
 	}
+	o.steps = o.buildStepRegistry()
+	return o
 }
 
 var _ domain.PaymentOwner = (*failingPaymentOwner)(nil)
 var _ domain.InventoryOwner = (*stubInventoryOwner)(nil)
 
-// TestExecuteStep_PaymentFailsReturnsFailedOutcome verifica que cuando el pago falla,
-// executeStep devuelve StepOutcomeFailed sin compensar (la compensación la maneja el orquestador).
-func TestExecuteStep_PaymentFailsReturnsFailedOutcome(t *testing.T) {
+// TestExecProcessPayment_FailsReturnsFailedOutcome verifica que cuando el pago falla,
+// execProcessPayment devuelve StepOutcomeFailed.
+func TestExecProcessPayment_FailsReturnsFailedOutcome(t *testing.T) {
 	o := newTestOrchestrator(&failingPaymentOwner{}, &stubInventoryOwner{})
 
-	outcome, err := o.executeStep(context.Background(), "PROCESS_PAYMENT", 1, 99.99, 1, 1)
+	outcome, err := o.execProcessPayment(context.Background(), 1, 99.99, 1, 1)
 
 	if err == nil {
 		t.Fatal("se esperaba un error cuando el pago falla")
@@ -78,15 +80,15 @@ func TestExecuteStep_PaymentFailsReturnsFailedOutcome(t *testing.T) {
 	}
 }
 
-// TestExecuteStep_PaymentApprovedReturnsCompletedOutcome verifica que cuando el pago
-// es aprobado por el fake provider, executeStep devuelve StepOutcomeCompleted.
-func TestExecuteStep_PaymentApprovedReturnsCompletedOutcome(t *testing.T) {
+// TestExecProcessPayment_ApprovedReturnsCompletedOutcome verifica que cuando el pago
+// es aprobado por el fake provider, execProcessPayment devuelve StepOutcomeCompleted.
+func TestExecProcessPayment_ApprovedReturnsCompletedOutcome(t *testing.T) {
 	fakePay := NewFakePaymentProvider()
 	fakePay.SetOutcome("order-1-PROCESS_PAYMENT-attempt-1", string(domain.PaymentStatusApproved))
 
 	o := newTestOrchestrator(fakePay, &stubInventoryOwner{})
 
-	outcome, err := o.executeStep(context.Background(), "PROCESS_PAYMENT", 1, 99.99, 1, 1)
+	outcome, err := o.execProcessPayment(context.Background(), 1, 99.99, 1, 1)
 
 	if err != nil {
 		t.Fatalf("no se esperaba error, se obtuvo: %v", err)
@@ -96,12 +98,12 @@ func TestExecuteStep_PaymentApprovedReturnsCompletedOutcome(t *testing.T) {
 	}
 }
 
-// TestExecuteStep_ReserveInventorySucceeds verifica que la reserva de inventario
+// TestExecReserveInventory_Succeeds verifica que la reserva de inventario
 // siempre devuelve completado cuando el dueño no falla.
-func TestExecuteStep_ReserveInventorySucceeds(t *testing.T) {
+func TestExecReserveInventory_Succeeds(t *testing.T) {
 	o := newTestOrchestrator(&failingPaymentOwner{}, &stubInventoryOwner{})
 
-	outcome, err := o.executeStep(context.Background(), "RESERVE_INVENTORY", 1, 0, 1, 1)
+	outcome, err := o.execReserveInventory(context.Background(), 1, 0, 1, 1)
 
 	if err != nil {
 		t.Fatalf("no se esperaba error, se obtuvo: %v", err)
@@ -111,12 +113,12 @@ func TestExecuteStep_ReserveInventorySucceeds(t *testing.T) {
 	}
 }
 
-// TestExecuteStep_CreateOrderReturnsCompleted verifica que crear orden siempre
+// TestExecCreateOrder_ReturnsCompleted verifica que crear orden siempre
 // devuelve completado (no depende de dueños externos).
-func TestExecuteStep_CreateOrderReturnsCompleted(t *testing.T) {
+func TestExecCreateOrder_ReturnsCompleted(t *testing.T) {
 	o := newTestOrchestrator(&failingPaymentOwner{}, &stubInventoryOwner{})
 
-	outcome, err := o.executeStep(context.Background(), "CREATE_ORDER", 1, 0, 0, 0)
+	outcome, err := o.execCreateOrder(context.Background(), 1, 0, 0, 0)
 
 	if err != nil {
 		t.Fatalf("no se esperaba error, se obtuvo: %v", err)

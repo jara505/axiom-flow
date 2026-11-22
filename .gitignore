@@ -1,0 +1,37 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go build output
+/axiom-server
+/services/payment/payment-service
+/services/shipment/shipment-service
+/services/inventory/inventory-service
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE / tooling
+.vscode/
+.idea/
+.kilo/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backups / temp
+*.bak
+*.swp
+*.swo
+*~
+
+# Logs
+*.log

@@ -1,13 +1,24 @@
-# Axiom Flow
+<p align="center">
+  <a href="#descripción">
+    <img width="60" height="60" src="https://raw.githubusercontent.com/jara505/axiom-flow/main/assets/logo.png" alt="Axiom Flow">
+  </a>
+  <div>
+    <span style="font-size: 2rem; font-weight: bold; color: #333;">Axiom Flow</span><br>
+    <span style="color: #666; font-size: 1rem;">Orquestación de transacciones distribuidas con el patrón Saga</span>
+  </div>
+</p>
 
-Orquestación de transacciones distribuidas con el patrón **Saga** para flujos de orden, inventario, pago y envío. Sistema backend en Go con PostgreSQL, consistencia fuerte por servicio y compensación automática ante fallos.
+<p align="center">
+  <a href="#descripción"><kbd>Descripción</kbd></a>&nbsp;&nbsp;|&nbsp;&nbsp;
+  <a href="#arquitectura"><kbd>Arquitectura</kbd></a>&nbsp;&nbsp;|&nbsp;&nbsp;
+  <a href="#stack-tecnológico"><kbd>Stack tecnológico</kbd></a>&nbsp;&nbsp;|&nbsp;&nbsp;
+  <a href="#api-documentada"><kbd>API Documentada</kbd></a>&nbsp;&nbsp;|&nbsp;&nbsp;
+  <a href="#cómo-ejecutar"><kbd>Cómo ejecutar</kbd></a>&nbsp;&nbsp;|&nbsp;&nbsp;
+  <a href="#variables-de-entorno"><kbd>Variables de entorno</kbd></a>&nbsp;&nbsp;|&nbsp;&nbsp;
+  <a href="#licencia"><kbd>Licencia</kbd></a>
+</p>
 
-![Go](https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-336791?logo=postgresql&logoColor=white)
-![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)
-![Patrón Saga](https://img.shields.io/badge/Patr%C3%B3n-Saga-ff6b35)
-
----
+<hr>
 
 ## Descripción
 
@@ -19,7 +30,9 @@ Cada microservicio es autónomo y posee su propia base de datos PostgreSQL, elim
 
 ## Arquitectura
 
-![diagram.png](diagram.png)
+<p align="center">
+  <img src="diagram.png" alt="Arquitectura de Axiom Flow" style="max-width: 100%; height: auto;">
+</p>
 
 ---
 
@@ -57,21 +70,55 @@ La especificación OpenAPI 3.0 completa está en `api/openapi.yaml` y puede impo
 
 ## Cómo ejecutar
 
+Usando Docker Compose (recomendado):
+
 ```bash
 # Clonar el repositorio
 git clone https://github.com/jara505/axiom-flow.git
 cd axiom-flow
 
-# Configurar variables de entorno
+# Copiar y configurar variables de entorno
 cp .env.example .env
 # Editar .env con tus credenciales de PostgreSQL
 
-# Ejecutar el monolito (puerto 8080)
+# Levantar todos los servicios (PostgreSQL, Redis, microservicios y monolito)
+docker-compose up -d
+```
+
+Los servicios se iniciarán en los siguientes puertos:
+- **Monolito (órdenes + Saga):** puerto 8080
+- **Servicio de envíos:** puerto 8081
+- **Servicio de inventario:** puerto 8082
+- **Servicio de pagos:** puerto 8083
+
+Para ver los logs de todos los servicios:
+```bash
+docker-compose logs -f
+```
+
+Para detener todos los servicios:
+```bash
+docker-compose down
+```
+
+### Desarrollo local sin Docker (solo para desarrollo):
+
+Si prefieres ejecutar los servicios directamente sin Docker:
+
+```bash
+# 1. Levantar PostgreSQL localmente (o usar el que ya tengas)
+# Los servicios esperan las variables DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+
+# 2. Levantar Redis localmente
+redis-server --daemonize yes
+
+# 3. Ejecutar el monolito
 go run ./cmd/server/
 
-# En terminales separadas, ejecutar microservicios:
+# 4. En terminales separadas, ejecutar microservicios:
 go run ./services/inventory/main.go   # puerto 8082
 go run ./services/shipment/main.go    # puerto 8081
+go run ./services/payment/main.go     # puerto 8083
 ```
 
 Cada servicio inicializa su esquema automáticamente al arrancar (`initSchema`), por lo que no es necesario aplicar migraciones manuales en primera ejecución.
